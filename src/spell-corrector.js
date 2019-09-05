@@ -5,13 +5,14 @@ class SpellCorrector {
      * @param {string} sourceText
      */
     constructor(sourceText) {
-        // TODO: Object<word:ranking>
         const words = this.words(sourceText);
         this.WORDS_COUNT = words.length;
-        this.WORDS = Object.entries([{}].concat(words).reduce((aggregator, value) => {
+        const wordsGrouped = Object.entries([{}].concat(words).reduce((aggregator, value) => {
             aggregator[value] = (isNaN(aggregator[value]) ? 0 : aggregator[value]) + 1;
             return aggregator;
         })).sort(([,c1], [,c2]) => c1 > c2 ? -1 : (c2 > c1 ? 1 : 0));
+        this.WORDS_RANKING = wordsGrouped.map(([word]) => word);
+        this.WORDS = [{}].concat(wordsGrouped).reduce((aggr, [word, occurencies]) => Object.assign(aggr, {[word]: occurencies / words.length}));
     }
 
     /**
@@ -29,11 +30,11 @@ class SpellCorrector {
      * Probability
      *
      * @param {string} word
-     * @param {number} N
      * @returns {number}
      */
-    probability(word, N){
-        return ((this.WORDS.find(([dictionaryWord]) => word === dictionaryWord) || []) [1] || 0) / (N || this.WORDS_COUNT);
+    probability(word){
+        return this.WORDS[word] || 0;
+        //return ((this.WORDS.find(([dictionaryWord]) => word === dictionaryWord) || []) [1] || 0) / (N || this.WORDS_COUNT);
     }
 
     /**
@@ -66,12 +67,10 @@ class SpellCorrector {
      * @returns {Array<string>}
      */
     known(matcher) {
-        return (this.WORDS.find(([word]) => {
-            if (typeof matcher === 'string') {
-                return matcher === word;
-            }
-            return matcher.test(word)
-        }) || [])[0];
+        if (typeof matcher === 'string') {
+            return this.WORDS[matcher];
+        }
+        return this.WORDS_RANKING.find( word => matcher.test(word));
     }
 
     /**

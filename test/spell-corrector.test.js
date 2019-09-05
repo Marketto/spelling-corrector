@@ -23,10 +23,14 @@ describe('Test Set 1', () => {
     summary.total = summary.ok + summary.ko;
 
     it('Should succed above 75%', () => {
-        (summary.ok * 100/ summary.total).should.above(75);
+        Math.round(summary.ok * 100/ summary.total).should.above(75);
+    });
+
+    it('Should succed at last 250 words', () => {
+        summary.ok.should.above(250);
     });
 
     it('Should check more than 41 words per second', () => {
-        (summary.total * 1000 / summary.duration).should.be.above(41);
+        Math.round(summary.total * 1000 / summary.duration).should.be.above(41);
     });
 });
