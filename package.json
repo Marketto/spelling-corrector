@@ -1,0 +1,29 @@
+{
+  "name": "spell-corrector",
+  "version": "1.0.0",
+  "description": "Espelling Corrector",
+  "main": "spell-corrector.js",
+  "scripts": {
+    "test": "npx mocha",
+    "coverage": "npx nyc --reporter=lcovonly npx mocha",
+    "build": "npx webpack"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Marketto/spelling-corrector.git"
+  },
+  "author": "Marco Ricupero",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Marketto/spelling-corrector/issues"
+  },
+  "homepage": "https://github.com/Marketto/spelling-corrector#readme",
+  "devDependencies": {
+    "chai": "^4.2.0",
+    "chai-things": "^0.2.0",
+    "mocha": "^6.2.0",
+    "nyc": "^14.1.1",
+    "webpack": "^4.39.3",
+    "webpack-cli": "^3.3.7"
+  }
+}
