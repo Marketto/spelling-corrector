@@ -64,7 +64,7 @@ class SpellCorrector {
         if(this.WORDS[word]){
             yield word;
         }
-        
+
         yield* Array.from(this.known(this.edits1(word)))
             .sort((a, b) => Math.sign([a, b].map(v => this.WORDS_RANKING.indexOf(v)).reduce((ra, rb)=>ra-rb)));
         
@@ -117,12 +117,12 @@ class SpellCorrector {
      * Edits
      *
      * @param {string} word
+     * @param {Array<string>} LETTERS
      * @yield {string}
      */
-    * edits2(word) {
-        const edits1 = this.edits1(word);
-        for (let edit of edits1) {
-            yield* this.edits1(edit);
+    * edits2(word, LETTERS, edits = this.edits1(word, LETTERS)) {
+        for (let edit of edits) {
+            yield* this.edits1(edit, LETTERS);
         }
     }
 }

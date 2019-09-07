@@ -5,6 +5,8 @@
   "main": "spell-corrector.js",
   "scripts": {
     "test": "npx mocha",
+    "debug": "node",
+    "initDb": "node ./script/initDb.js",
     "coverage": "npx nyc --reporter=lcovonly npx mocha",
     "build": "npx webpack"
   },
@@ -25,5 +27,8 @@
     "nyc": "^14.1.1",
     "webpack": "^4.39.3",
     "webpack-cli": "^3.3.7"
+  },
+  "dependencies": {
+    "mongodb": "^3.3.2"
   }
 }
