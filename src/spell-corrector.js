@@ -13,6 +13,14 @@ class SpellCorrector {
         })).sort(([,c1], [,c2]) => c1 > c2 ? -1 : (c2 > c1 ? 1 : 0));
         this.WORDS_RANKING = wordsGrouped.map(([word]) => word);
         this.WORDS = [{}].concat(wordsGrouped).reduce((aggr, [word, occurencies]) => Object.assign(aggr, {[word]: occurencies / words.length}));
+        this.LETTERS = [''].concat(this.WORDS_RANKING).reduce((a, b) => {
+            b.split('').forEach(c => {
+                if (!a.includes(c)) {
+                    a += c;
+                }
+            });
+            return a;
+        });
     }
 
     /**
@@ -23,7 +31,7 @@ class SpellCorrector {
      */
     words(text = '') {
         return text.toLowerCase()
-            .match(/(?=(?!_))[^\s"'()\[\],;.:@#*^?!£$%&=\\\/<>°§+\-\|\~\d]{3,}(?<=[^_])/gmi);
+            .match(/(?=(?!_))[^\s"'()[\],;.:@#*^?!£$%&=\\\/<>°§+\-|~\d]{3,}(?<=[^_])/gmiu);
     }
 
     /**
@@ -34,7 +42,6 @@ class SpellCorrector {
      */
     probability(word){
         return this.WORDS[word] || 0;
-        //return ((this.WORDS.find(([dictionaryWord]) => word === dictionaryWord) || []) [1] || 0) / (N || this.WORDS_COUNT);
     }
 
     /**
@@ -44,64 +51,79 @@ class SpellCorrector {
      * @returns {string}
      */
     correction(word) {
-        return this.candidate(word);
+        return this.candidates(word).next().value;
     }
 
     /**
-     * Candidates
-     * @method
-     * @param {sring} word
-     * @returns {Array<string>}
-     */
-    candidate(word) {
-        return this.known(word)
-            || this.known(this.matchers(word))
-            || this.known(this.matchers(word, true))
-            || word;
-    }
-
-    /**
-     * Known words
-     *
-     * @param {RegExp|string} matcher
-     * @returns {Array<string>}
-     */
-    known(matcher) {
-        if (typeof matcher === 'string') {
-            return this.WORDS[matcher];
-        }
-        return this.WORDS_RANKING.find( word => matcher.test(word));
-    }
-
-    /**
-     * Matchers
+     * Correction
      *
      * @param {string} word
-     * @param {boolean} double
-     * @returns {Array<string>}
+     * @yield {string}
      */
-    matchers(word, double) {
-        const matches = [];
-        const firstMatch = (w, i) => `.?${w[i]}?`;
-        const midMatch = (w, i) => `(?:${w[i - 1]}${firstMatch(w, i)}|${w[i]}${w[i - 1]})`;
-        const lastMatch = (w, i) => `(?:${w[i - 1]}(?:.${w[i]}|${w[i]}?.?)|${w[i]}${w[i - 1]})`;
-        const possibilities = (w, i) => i > 0 ? (i < w.length - 1 ? midMatch(w, i) : lastMatch(w, i)) : firstMatch(w, i);
-        for (let i = 0; i < word.length; i++) {
-            const part1 = word.substr(0, Math.max(i - 1, 0));
-            if (double) {
-                const twinMatch = `(?:(?:${possibilities(word, i)}${possibilities(word, i+1)})|(?:${i > 0 ? word.substr(i - 1, 2) : word[i]}..${word[i+1]}))`;
-                matches.push(`(?:${part1}${twinMatch}${word.substr(i + 2)})`);
-                for (let j = i + 2; j < word.length; j++) {
-                    const part2 = word.substring(i + 1, j - 1);
-                    const part3 = word.substr(j + 1);
-                    matches.push(`(?:${part1}${possibilities(word, i)}${part2}${possibilities(word.substr(i), j - i)}${part3})`);
-                }
-            } else {
-                const part2 = word.substr(i + 1);
-                matches.push(`(?:${part1}${possibilities(word, i)}${part2})`);
+    * candidates(word) {
+        if(this.WORDS[word]){
+            yield word;
+        }
+        
+        yield* Array.from(this.known(this.edits1(word)))
+            .sort((a, b) => Math.sign([a, b].map(v => this.WORDS_RANKING.indexOf(v)).reduce((ra, rb)=>ra-rb)));
+        
+        yield* Array.from(this.known(this.edits2(word)))
+            .sort((a, b) => Math.sign([a, b].map(v => this.WORDS_RANKING.indexOf(v)).reduce((ra, rb)=>ra-rb)));
+    
+        return word;
+    }
+
+    /**
+     * Edits
+     *
+     * @param {Iterator<string>} editIterator
+     * @yield {string}
+     */
+    * known(editIterator) {
+        for (let variant of editIterator) {
+            if(this.WORDS[variant]){
+                yield variant;
             }
         }
-        return new RegExp(`^(?:${matches.join('|')})$`, 'ui');
+    }
+
+    /**
+     * Edits
+     *
+     * @param {string} word
+     * @yield {string}
+     */
+    * edits1(word) {
+        for (let i = 0; i < word.length; i++) {
+            const leftSlice = word.substring(0, i);
+            const rightSlice = word.substring(i + 1);
+            yield leftSlice + rightSlice;
+            yield leftSlice + word[i + 1] + word[i] + rightSlice.substring(1);
+            for (let l = 0; l < this.LETTERS.length; l++) {
+                const c = this.LETTERS[l];
+                if (c !== word[i]) {
+                    yield leftSlice + c + rightSlice;
+                }
+                yield leftSlice + c + word[i] + rightSlice;
+            }
+        }
+        for (let l = 0; l < this.LETTERS.length; l++) {
+            yield word + this.LETTERS[l];
+        }
+    }
+
+    /**
+     * Edits
+     *
+     * @param {string} word
+     * @yield {string}
+     */
+    * edits2(word) {
+        const edits1 = this.edits1(word);
+        for (let edit of edits1) {
+            yield* this.edits1(edit);
+        }
     }
 }
 module.exports = SpellCorrector;

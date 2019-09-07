@@ -43,24 +43,21 @@ describe('Porting', () => {
         it('Should catch words properly "This is a test. 123; A TEST this is."', () => {
             sc.words('This is a test. 123; A TEST this is.').should.have.ordered.members(['this', 'test', 'test', 'this']);
         });
-        it('Should load 32192 words', () => {
-            sc.WORDS.length.should.be.equal(28964);
-        });
         it('Should load 1115504 words', () => {
-            const tot = sc.WORDS.map(([,c]) => c).reduce((a, b) => a + b);
+            const tot = sc.WORDS_COUNT;
             tot.should.be.equal(876736);
         });
         it('Should match 10 most common words', () => {
-            sc.WORDS[0].should.contain('the');
-            sc.WORDS[1].should.contain('and');
-            sc.WORDS[2].should.contain('that');
-            sc.WORDS[3].should.contain('was');
-            sc.WORDS[4].should.contain('his');
-            sc.WORDS[5].should.contain('with');
-            sc.WORDS[6].should.contain('had');
-            sc.WORDS[7].should.contain('for');
-            sc.WORDS[8].should.contain('not');
-            sc.WORDS[9].should.contain('from');
+            sc.WORDS_RANKING[0].should.contain('the');
+            sc.WORDS_RANKING[1].should.contain('and');
+            sc.WORDS_RANKING[2].should.contain('that');
+            sc.WORDS_RANKING[3].should.contain('was');
+            sc.WORDS_RANKING[4].should.contain('his');
+            sc.WORDS_RANKING[5].should.contain('with');
+            sc.WORDS_RANKING[6].should.contain('had');
+            sc.WORDS_RANKING[7].should.contain('for');
+            sc.WORDS_RANKING[8].should.contain('not');
+            sc.WORDS_RANKING[9].should.contain('from');
         });
     });
     describe('Probability', () => {
