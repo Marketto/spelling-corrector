@@ -46,33 +46,23 @@ class MongoSpellCorrector {
             const ignoreMap = Object.freeze([{}].concat(wordsRanking).reduce((aggr, w) => Object.assign(aggr, {[w]: true})));
             for (let rank = 0; rank < wordsRankingLength; rank++){
                 const word = wordsRanking[rank];
-                const edits1 = Array.from(this.edits1(word, letters, ignoreMap))
+                const edits1 = Array.from(this.edits(word, letters, ignoreMap));
+                const mistakes1 = edits1
                     .map(mistake => ({
                         mistake,
                         weight: mistake.length === word.length ? 1.2 : 1 
                     }));
-                const edits2 = Array.from(this.edits2(word, letters, ignoreMap))
+                const edits2 = Array.from(this.reEdits(edits1, letters, ignoreMap, this.minWordLength + 1));
+                const mistakes2 = edits2
                     .map(mistake => ({
                         mistake,
                         weight: mistake.length === word.length ? 2.4 : Math.abs(mistake.length - word.length) === 1 ? 2.2 : 2 
                     }));
                 let mistakes;
-                if (edits2.length > 1) {
-                    const edits3 = Array.from(this.edits3(word, letters, ignoreMap))
-                        .map(mistake => {
-                            const lenDiff = Math.abs(mistake.length - word.length);
-                            return {
-                                mistake,
-                                weight: mistake.length === word.length ? 3.6 : lenDiff === 1 ? 3.4 : lenDiff === 2 ? 3.2 : 3 
-                            };
-                        });
-                    if (edits3.length > 1) {
-                        mistakes = edits1.concat(edits2);
-                    } else {
-                        mistakes = edits1.concat(edits2).concat(edits3);
-                    }
+                if (mistakes2.length > 1) {
+                    mistakes = mistakes1.concat(mistakes2);
                 } else {
-                    mistakes = edits1;
+                    mistakes = mistakes1;
                 }
                 
                 const count = WORDS[word];
@@ -122,10 +112,10 @@ class MongoSpellCorrector {
      * @param {Object} [ignoreMap={}]
      * @yield {string}
      */
-    static* edits1(word, letters = ['*'], ignoreMap = {}) {
-        const history = { [word]: true };
+    static* edits(word, letters = ['*'], ignoreMap = {}) {
+        const history = Object.assign({ [word]: true }, ignoreMap);
         const checkHistory = value => {
-            if (!history[value] && !ignoreMap[value]){
+            if (!history[value] && value.length >= this.minWordLength){
                 history[value] = true;
                 return value;
             }
@@ -169,58 +159,28 @@ class MongoSpellCorrector {
     /**
      * Edits
      *
-     * @param {string} word
+     * @param {Array<string>} words
      * @param {string} letters
      * @param {Object} [ignoreMap={}]
+     * @param {number} minLength
      * @yield {string}
      */
-    static* edits2(word, letters, ignoreMap = {}) {
-        if (word.length < this.minWordLength + 1) {
-            return;
-        }
-        const history = { [word]: true };
+    static* reEdits(words, letters, ignoreMap = {}, minLength = this.minWordLength) {
+        const history = Object.assign({}, ignoreMap);
+        words.forEach(w => Object.assign(history, {[w]: true}));
         const checkHistory = value => {
-            if (!history[value] && !ignoreMap[value]){
+            if (!history[value] && value.length >= minLength){
                 history[value] = true;
                 return value;
             }
         };
-        for (let edit1 of this.edits1(word, letters, history)) {
-            history[edit1] = true;
-            for (let edit2 of this.edits1(edit1, letters, history)) {
-                const value = checkHistory(edit2);
-                if (value) {
-                    yield value;
-                }
-            }
-        }
-    }
-
-    /**
-     * Edits
-     *
-     * @param {string} word
-     * @param {string} letters
-     * @param {Object} [ignoreMap={}]
-     * @yield {string}
-     */
-    static* edits3(word, letters, ignoreMap = {}) {
-        if (word.length < this.minWordLength + 2) {
-            return;
-        }
-        const history = { [word]: true };
-        const checkHistory = value => {
-            if (!history[value] && !ignoreMap[value]){
-                history[value] = true;
-                return value;
-            }
-        };
-        for (let edit2 of this.edits1(word, letters, history)) {
-            history[edit2] = true;
-            for (let edit3 of this.edits1(edit2, letters, history)) {
-                const value = checkHistory(edit3);
-                if (value) {
-                    yield value;
+        for (let edit of words) {
+            if (edit.length >= minLength) {
+                for (let edit2 of this.edits(edit, letters, history)) {
+                    const value = checkHistory(edit2);
+                    if (value) {
+                        yield value;
+                    }
                 }
             }
         }
@@ -264,7 +224,7 @@ class MongoSpellCorrector {
             return;
         }
         const targetWord = inputWord.trim().replace(new RegExp(`[${this.constructor.symbolPattern}]+`, 'igmu'), '');
-        if (targetWord.length < 3) {
+        if (targetWord.length < this.constructor.minWordLength) {
             return inputWord;
         }
         const client = await MongoClient.connect(this.dbUrl, { useNewUrlParser: true, useUnifiedTopology: true });
@@ -284,32 +244,6 @@ class MongoSpellCorrector {
             if (result) {
                 correctedWord = result.word;
             }
-            /*
-            const pipeLine = wList => [
-                {$match:{'mistakes.mistake': {$in: wList}}}
-                ,{$project: {word:1, probability:1, 'mistake': {$filter: {input:'$mistakes', as: 'mistake', cond: {$in: ['$$mistake.mistake', wList]}}}}}
-                ,{$unwind: '$mistake'}
-                ,{$project: {word:1, probability:1, mistake: '$mistake.mistake', weight: '$mistake.weight', weightProbability: {$divide: ['$probability', '$mistake.weight']}}}
-                ,{$sort: {weightProbability:-1}}
-                ,{$limit: 1}
-            ];
-            const [mistakeResult] = await wordsCollection.aggregate(pipeLine([targetWord])).toArray();
-            if (mistakeResult) {
-                correctedWord = mistakeResult.word;
-            } else {
-                const edits1 = Array.from(this.constructor.edits1(targetWord));
-                const [mistakeEditResult] = await wordsCollection.aggregate(pipeLine(edits1)).toArray();
-                if (mistakeEditResult) {
-                    correctedWord = mistakeEditResult.word;
-                } else {
-                    const edits2 = Array.from(this.constructor.edits2(targetWord)).filter(v => !edits1.includes(v));
-                    const [mistakeEdit2Result] = await wordsCollection.aggregate(pipeLine(edits2)).toArray();
-                    if (mistakeEdit2Result) {
-                        correctedWord = mistakeEdit2Result.word;
-                    }
-                }
-            }
-            */
         }
 
         client.close();
