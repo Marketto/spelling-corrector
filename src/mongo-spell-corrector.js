@@ -1,10 +1,11 @@
-const fs = require('fs');
 const MongoClient = require('mongodb').MongoClient;
 
 const DEFAULT_DB_ADDRESS = 'mongodb://localhost:27017';
 const DEFAULT_DB_NAME = 'spellchecker';
+const DEFAULT_LOCALE = 'en_us';
 
 class MongoSpellCorrector {
+
     /**
      * Db Init and feed
      *
@@ -13,76 +14,206 @@ class MongoSpellCorrector {
      * @param {string} fileName
      * @param {string} [dbUrl=DEFAULT_DB_ADDRESS]
      * @param {string} [dbName=DEFAULT_DB_NAME]
+     * @param {string} [locale=DEFAULT_LOCALE]
      * @memberof MongoSpellCorrector
      */
-    static async generateDb(fileName, dbUrl = DEFAULT_DB_ADDRESS, dbName = DEFAULT_DB_NAME) {
-        const words = this.words(fs.readFileSync(fileName, 'utf8'));
-        const WORDS = [{}].concat(words).reduce((aggregator, value) => {
-            aggregator[value] = (isNaN(aggregator[value]) ? 0 : aggregator[value]) + 1;
-            return aggregator;
-        });
-        const wordsGrouped = Object.entries(WORDS).sort(([,c1], [,c2]) => c1 > c2 ? -1 : c2 > c1 ? 1 : 0);
-        const wordsRanking = wordsGrouped.map(([word]) => word);
+    static initializer(fileName, dbUrl = DEFAULT_DB_ADDRESS, dbName = DEFAULT_DB_NAME, locale = DEFAULT_LOCALE) {
+        const cluster = require('cluster');
 
-        const letters = [''].concat(wordsRanking).reduce((a, b) => {
-            b.split('').forEach(c => {
-                if (!a.includes(c) && c !== '_') {
-                    a += c;
+        //Master process
+        if (cluster.isMaster) {
+            return new Promise(async (mainResolve, mainReject) => {
+                // Reading source file
+                const { queue, letters, ignoreList } = (({ ranking, checkList, letters }) => ({
+                        queue: ranking,
+                        letters,
+                        ignoreList: checkList
+                    }))(this.fileToDictionary(fileName));
+
+                const totalWords = queue.length;
+                //Initializing DB
+
+                const client = await MongoClient.connect(dbUrl, { useNewUrlParser: true, useUnifiedTopology: true });
+                try {
+                    const db = client.db(dbName);
+                    // Cleaning up target collection using locale as collectionName
+                    await db.listCollections({name: locale}).toArray().then((collections) => Promise.all(collections.map(({name}) => db.dropCollection(name))));
+                    
+                    //Creating collection
+                    await db.createCollection(locale);
+                    const wordsCollection = db.collection(locale);
+                    //Creating indexes for collection
+                    await wordsCollection.createIndex({ word:1 }, { unique: true });
+                    await wordsCollection.createIndex({ 'mistakes.mistake':1 });
+
+
+                    //Clustering
+                    //Forking process for each system cpu
+                    const os = require('os');
+                    os.cpus().forEach(() => cluster.fork());
+                    const unqueue = worker => {
+                        if (queue.length) {
+                            //unqueueing next word to process
+                            const word = queue.shift();
+                            
+                            // Assigning tasks to workers
+                            worker.send({
+                                word,
+                                letters,
+                                ignoreList
+                            });
+                        } else {
+                            //killing worker
+                            worker.send();
+                        }
+                    };
+                    const checkJobComplete = () => {
+                        if (!queue.length && !Object.keys(cluster.workers).length) {
+                            //Queue is empty and no workers are working
+                            // eslint-disable-next-line no-console
+                            console.log('COMPLETE');
+                            // closing connection
+                            client.close().then(mainResolve);
+                        }
+                    };
+                    Object.values(cluster.workers).forEach(worker => {
+                        unqueue(worker);
+                        worker.on('message', async (document) => {
+                            if (document) {
+                                unqueue(worker);
+                                await wordsCollection.insertOne(document);
+                                const completed = totalWords - queue.length - Object.keys(cluster.workers).length - 1;
+                                const progress = Math.round(completed * 1000 / totalWords)/10;
+                                const perc = (progress + '').split('.').map((v, i, a) => a.length===1 || !i ? v.padStart(3, '  0') : v).join('.').padEnd(5,'.0');
+                                // eslint-disable-next-line no-console
+                                console.log(`Progress: ${perc}% - ${completed} / ${totalWords}`);
+                            }
+                        });
+                        worker.on('exit', ({id}, code) => {
+                            if (code) {
+                                // eslint-disable-next-line no-console
+                                console.log(`Worker ${id} crashed. Restarting...`);
+                                if (queue.length) {
+                                    unqueue(cluster.fork());
+                                }
+                            } else {
+                                checkJobComplete();
+                            }
+                        });
+                    });
+                } catch(e) {
+                    // closing db connection before throwing error
+                    await client.close();
+                    mainReject(e);
                 }
             });
-            return a;
+        } else {    //Threads
+            return this.documentGenerator()
+                .then(() => process.exit(0))
+                .catch((err) => {
+                    // eslint-disable-next-line no-console
+                    console.error(`Thread ${process.pid} error:`, err);
+                    process.exit(1);
+                });
+        }
+    }
+
+    /**
+     * @static
+     * @returns {Promise}
+     * @memberof MongoSpellCorrector
+     */
+    static documentGenerator() {
+        return new Promise((forkResolve, forkReject) => {
+            process.on('message', message => {
+                if (message) {
+                    const { word: {word, rank, count, probability}, letters, ignoreList } = message;
+                    try {
+                        const edits1 = Array.from(this.edits(word, letters, ignoreList));
+                        const mistakes1 = edits1
+                            .map(mistake => ({
+                                mistake,
+                                weight: mistake.length === word.length ? 1.2 : 1 
+                            }));
+                        const edits2 = Array.from(this.reEdits(edits1, letters, ignoreList, this.minWordLength + 1));
+                        const mistakes2 = edits2
+                            .map(mistake => ({
+                                mistake,
+                                weight: mistake.length === word.length ? 2.4 : Math.abs(mistake.length - word.length) === 1 ? 2.2 : 2 
+                            }));
+                        let mistakes;
+                        if (mistakes2.length > 1) {
+                            mistakes = mistakes1.concat(mistakes2);
+                        } else {
+                            mistakes = mistakes1;
+                        }
+        
+                        process.send({
+                            word,
+                            rank,
+                            count,
+                            probability,
+                            mistakes
+                        });
+                        // eslint-disable-next-line no-console
+                        console.log(`Thread ${process.pid} task complete: ${word}, listening for new activity...`);
+                    } catch (err) {
+                        forkReject(err);
+                    }
+                } else {
+                    forkResolve();
+                }
+            });
+        });
+    }
+
+    /**
+     * Db Init and feed
+     *
+     * @static
+     * @param {string} fileName
+     * @returns {Object} { ranking, checkList, letters }
+     * @memberof MongoSpellCorrector
+     */
+    static fileToDictionary(fileName) {
+        const fs = require('fs');
+        const text = fs.readFileSync(fileName, 'utf8');
+        const wordList = this.words(text);
+        const wordsTotalCount = wordList.length;
+        const wordsMap = {};
+        const checkList = {};
+        wordList.forEach(word => {
+            if (checkList[word]) {
+                wordsMap[word].count++;
+            } else {
+                wordsMap[word] = {
+                    word,
+                    count: 1
+                };
+                checkList[word] = true;
+            }
         });
 
-        const client = await MongoClient.connect(dbUrl, { useNewUrlParser: true, useUnifiedTopology: true });
-        try {
-            const db = client.db(dbName);
-            await db.listCollections().toArray().then(collections => Promise.all(collections.map(({name}) => db.dropCollection(name))));
-
-            await db.createCollection('words');
-            const wordsCollection = db.collection('words');
-            await wordsCollection.createIndex({ word:1 }, { unique: true });
-            await wordsCollection.createIndex({ 'mistakes.mistake':1 });
-            const wordsRankingLength = wordsRanking.length;
-            const ignoreMap = Object.freeze([{}].concat(wordsRanking).reduce((aggr, w) => Object.assign(aggr, {[w]: true})));
-            for (let rank = 0; rank < wordsRankingLength; rank++){
-                const word = wordsRanking[rank];
-                const edits1 = Array.from(this.edits(word, letters, ignoreMap));
-                const mistakes1 = edits1
-                    .map(mistake => ({
-                        mistake,
-                        weight: mistake.length === word.length ? 1.2 : 1 
-                    }));
-                const edits2 = Array.from(this.reEdits(edits1, letters, ignoreMap, this.minWordLength + 1));
-                const mistakes2 = edits2
-                    .map(mistake => ({
-                        mistake,
-                        weight: mistake.length === word.length ? 2.4 : Math.abs(mistake.length - word.length) === 1 ? 2.2 : 2 
-                    }));
-                let mistakes;
-                if (mistakes2.length > 1) {
-                    mistakes = mistakes1.concat(mistakes2);
-                } else {
-                    mistakes = mistakes1;
+        const ranking = Object.values(wordsMap)
+            .sort((w1, w2) => w1.count > w2.count ? -1 : w2.count > w1.count ? 1 : 0);
+        let letters = '';
+        ranking.forEach((targetWord, rank) => {
+            Object.assign(targetWord, {
+                rank,
+                probability: targetWord.count / wordsTotalCount
+            });
+            targetWord.word.split('').forEach(c => {
+                if (!letters.includes(c) && letters !== '_') {
+                    letters += c;
                 }
-                
-                const count = WORDS[word];
+            });
+        });
 
-                await wordsCollection.insertOne({
-                    word,
-                    rank,
-                    count,
-                    probability: count/words.length,
-                    mistakes
-                });
-                const progress = Math.round((rank + 1) * 1000/wordsRankingLength)/10;
-                // eslint-disable-next-line no-console
-                console.log(`${progress}% - ${rank + 1} di ${wordsRankingLength}`);
-            }
-            return await client.close();
-        } catch(e) {
-            client.close();
-            throw e;
-        }
+        return {
+            ranking,
+            checkList,
+            letters
+        };
     }
 
     static get minWordLength() {
