@@ -10,11 +10,11 @@ class MongoSpellCorrector {
      * Db Init and feed
      *
      * @static
-     * @async
      * @param {string} fileName
      * @param {string} [dbUrl=DEFAULT_DB_ADDRESS]
      * @param {string} [dbName=DEFAULT_DB_NAME]
      * @param {string} [locale=DEFAULT_LOCALE]
+     * @returns {Promise}
      * @memberof MongoSpellCorrector
      */
     static initializer(fileName, dbUrl = DEFAULT_DB_ADDRESS, dbName = DEFAULT_DB_NAME, locale = DEFAULT_LOCALE) {
@@ -25,10 +25,10 @@ class MongoSpellCorrector {
             return new Promise(async (mainResolve, mainReject) => {
                 // Reading source file
                 const { queue, letters, ignoreList } = (({ ranking, checkList, letters }) => ({
-                        queue: ranking,
-                        letters,
-                        ignoreList: checkList
-                    }))(this.fileToDictionary(fileName));
+                    queue: ranking,
+                    letters,
+                    ignoreList: checkList
+                }))(this.fileToDictionary(fileName));
 
                 const totalWords = queue.length;
                 //Initializing DB
@@ -76,17 +76,19 @@ class MongoSpellCorrector {
                             client.close().then(mainResolve);
                         }
                     };
+                    const startDt = new Date();
                     Object.values(cluster.workers).forEach(worker => {
                         unqueue(worker);
                         worker.on('message', async (document) => {
                             if (document) {
+                                const progressDt = new Date();
                                 unqueue(worker);
                                 await wordsCollection.insertOne(document);
                                 const completed = totalWords - queue.length - Object.keys(cluster.workers).length - 1;
                                 const progress = Math.round(completed * 1000 / totalWords)/10;
                                 const perc = (progress + '').split('.').map((v, i, a) => a.length===1 || !i ? v.padStart(3, '  0') : v).join('.').padEnd(5,'.0');
                                 // eslint-disable-next-line no-console
-                                console.log(`Progress: ${perc}% - ${completed} / ${totalWords}`);
+                                console.log(`Progress: ${perc}% - ${completed} / ${totalWords} - avg: ${Math.round((progressDt-startDt)/completed)/1000}s/word`);
                             }
                         });
                         worker.on('exit', ({id}, code) => {
@@ -129,13 +131,15 @@ class MongoSpellCorrector {
                 if (message) {
                     const { word: {word, rank, count, probability}, letters, ignoreList } = message;
                     try {
-                        const edits1 = Array.from(this.edits(word, letters, ignoreList));
+                        const edits1 = Array.from(this.edits(word, letters))
+                            .filter((m, i, l) => l.indexOf(m) === i && !ignoreList[m]);
                         const mistakes1 = edits1
                             .map(mistake => ({
                                 mistake,
                                 weight: mistake.length === word.length ? 1.2 : 1 
                             }));
-                        const edits2 = Array.from(this.reEdits(edits1, letters, ignoreList, this.minWordLength + 1));
+                        const edits2 = Array.from(this.reEdits(edits1, letters))
+                            .filter((m, i, l) => l.indexOf(m) === i && !ignoreList[m] && !edits1.includes(m));
                         const mistakes2 = edits2
                             .map(mistake => ({
                                 mistake,
@@ -243,47 +247,25 @@ class MongoSpellCorrector {
      * @param {Object} [ignoreMap={}]
      * @yield {string}
      */
-    static* edits(word, letters = ['*'], ignoreMap = {}) {
-        const history = Object.assign({ [word]: true }, ignoreMap);
-        const checkHistory = value => {
-            if (!history[value] && value.length >= this.minWordLength){
-                history[value] = true;
-                return value;
-            }
-        };
+    static* edits(word, letters = ['*']) {
         for (let i = 0; i < word.length; i++) {
             const leftSlice = word.substring(0, i);
             const rightSlice = word.substring(i + 1);
             
-            const deletion = checkHistory(leftSlice + rightSlice);
-            if (deletion) {
-                yield deletion;
-            }
+            yield leftSlice + rightSlice;
             if (i < word.length -1) {
-                const swap = checkHistory(leftSlice + word[i + 1] + word[i] + rightSlice.substring(1));
-                if (swap) {
-                    yield swap;
-                }
+                yield leftSlice + word[i + 1] + word[i] + rightSlice.substring(1);
             }
             for (let l = 0; l < letters.length; l++) {
                 const c = letters[l];
                 if (c !== word[i]) {
-                    const replace = checkHistory(leftSlice + c + rightSlice);
-                    if (replace) {
-                        yield replace;
-                    }
+                    yield leftSlice + c + rightSlice;
                 }
-                const addition = checkHistory(leftSlice + c + word[i] + rightSlice);
-                if (addition) {
-                    yield addition;
-                }
+                yield leftSlice + c + word[i] + rightSlice;
             }
         }
         for (let l = 0; l < letters.length; l++) {
-            const addition = checkHistory(word + letters[l]);
-            if (addition) {
-                yield addition;
-            }
+            yield word + letters[l];
         }
     }
 
@@ -296,24 +278,9 @@ class MongoSpellCorrector {
      * @param {number} minLength
      * @yield {string}
      */
-    static* reEdits(words, letters, ignoreMap = {}, minLength = this.minWordLength) {
-        const history = Object.assign({}, ignoreMap);
-        words.forEach(w => Object.assign(history, {[w]: true}));
-        const checkHistory = value => {
-            if (!history[value] && value.length >= minLength){
-                history[value] = true;
-                return value;
-            }
-        };
+    static* reEdits(words, letters) {
         for (let edit of words) {
-            if (edit.length >= minLength) {
-                for (let edit2 of this.edits(edit, letters, history)) {
-                    const value = checkHistory(edit2);
-                    if (value) {
-                        yield value;
-                    }
-                }
-            }
+            yield* this.edits(edit, letters);
         }
     }
 
