@@ -251,19 +251,25 @@ class MongoSpellCorrector {
         for (let i = 0; i < word.length; i++) {
             const leftSlice = word.substring(0, i);
             const rightSlice = word.substring(i + 1);
-            
-            yield leftSlice + rightSlice;
+            //DELETION
+            if (word.length > this.minWordLength) {
+                yield leftSlice + rightSlice;
+            }
+            //SWAP
             if (i < word.length -1) {
                 yield leftSlice + word[i + 1] + word[i] + rightSlice.substring(1);
             }
             for (let l = 0; l < letters.length; l++) {
                 const c = letters[l];
                 if (c !== word[i]) {
+                    //REPLACE
                     yield leftSlice + c + rightSlice;
+                    //ADDITION
                     yield leftSlice + c + word[i] + rightSlice;
                 }
             }
         }
+        //ADDITION (tail)
         for (let l = 0; l < letters.length; l++) {
             yield word + letters[l];
         }
