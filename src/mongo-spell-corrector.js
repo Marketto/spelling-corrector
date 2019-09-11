@@ -260,8 +260,8 @@ class MongoSpellCorrector {
                 const c = letters[l];
                 if (c !== word[i]) {
                     yield leftSlice + c + rightSlice;
+                    yield leftSlice + c + word[i] + rightSlice;
                 }
-                yield leftSlice + c + word[i] + rightSlice;
             }
         }
         for (let l = 0; l < letters.length; l++) {
