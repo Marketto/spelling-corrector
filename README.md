@@ -1,2 +1,2 @@
-# spelling-corrector
+# An Awesome spelling-corrector
 Espelling Corrector
